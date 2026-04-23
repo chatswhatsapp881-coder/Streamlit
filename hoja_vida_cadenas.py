@@ -46,6 +46,10 @@ LOGOS_CADENAS = [
 # 2. FUNCIONES AUXILIARES
 # ─────────────────────────────────────────────────────────────────────────────
 
+def fmt_cop(v) -> str:
+    """Formatea valor como pesos colombianos: 1.234.567"""
+    return f"{int(v):,}".replace(",", ".")
+
 def _fetch_all(query_fn) -> list[dict]:
     """Pagina automáticamente hasta traer todos los registros de Supabase."""
     PAGE = 1000
@@ -71,7 +75,10 @@ def get_segmentos_nielsen():
             .range(s, e)
             .execute()
     )
-    valores = sorted({r["segmento_nielsen"] for r in data if r["segmento_nielsen"]})
+    valores = sorted({
+                        r["segmento_nielsen"] for r in data
+                        if r["segmento_nielsen"] == "SUPERMERCADOS"
+                    })
     return ["— Seleccione —"] + valores
 
 
@@ -215,6 +222,40 @@ def get_sellout_agregado_by_ean_pdv(ean_pdv) -> dict:
         "anio_b": ANIO_B,
     }
 
+def get_ranking_pdv(ean_pdv) -> dict:
+    """
+    Llama a la RPC get_ranking_pdv en Supabase.
+    Retorna dict con strings tipo "979 de 4080" por cada ranking.
+    """
+    VACIO = {"ranking_nacional": "", "ranking_cadena_nacional": "",
+             "ranking_cadena_regional": "", "tiene_datos": False}
+    try:
+        res  = supabase.rpc("get_ranking_pdv", {"p_ean": str(ean_pdv)}).execute()
+        data = res.data[0] if res.data else None
+
+        if not data:
+            return VACIO
+
+        r_nac = data.get("ranking_nacional")
+        t_nac = data.get("total_pdvs_nacional")
+        r_cad = data.get("ranking_cadena_nacional")
+        t_cad = data.get("total_pdvs_cadena")
+        r_reg = data.get("ranking_cadena_regional")
+        t_reg = data.get("total_pdvs_cadena_region")
+
+        return {
+            "ranking_nacional":        f"{r_nac} de {t_nac}" if r_nac is not None else "",
+            "ranking_cadena_nacional": f"{r_cad} de {t_cad}" if r_cad is not None else "",
+            "ranking_cadena_regional": f"{r_reg} de {t_reg}" if r_reg is not None else "",
+            "tiene_datos": True,
+        }
+
+    except Exception as e:
+        # Mostrar error real en pantalla para debug
+        import streamlit as st
+        st.error(f"❌ Error en get_ranking_pdv: {e}")
+        return VACIO
+
 
 def get_hoja_vida_existente(nombre_pdv: str) -> dict | None:
     res = (
@@ -227,20 +268,36 @@ def get_hoja_vida_existente(nombre_pdv: str) -> dict | None:
         .execute()
     )
     return res.data[0] if res.data else None
-
-
-def insertar_hoja_vida(data: dict):
+    
+def upsert_hoja_vida(data: dict):
+    """
+    Si el PDV ya tiene registro en hoja_vida_cadenas_farmacias, actualiza.
+    Si no existe, inserta. Retorna (True, id, accion) o (False, msg, None).
+    """
     try:
-        response = (
+        existing = (
             supabase
             .table("hoja_vida_supermercados")
-            .insert(data)
+            .select("id")
+            .eq("punto_de_venta", data.get("punto_de_venta", ""))
+            .limit(1)
             .execute()
         )
-        inserted_id = response.data[0]["id"] if response.data else None
-        return True, inserted_id
+        if existing.data:
+            record_id = existing.data[0]["id"]
+            supabase                 .table("hoja_vida_supermercados")                 .update(data)                 .eq("id", record_id)                 .execute()
+            return True, record_id, "actualizado"
+        else:
+            response = (
+                supabase
+                .table("hoja_vida_supermercados")
+                .insert(data)
+                .execute()
+            )
+            inserted_id = response.data[0]["id"] if response.data else None
+            return True, inserted_id, "insertado"
     except Exception as e:
-        return False, str(e)
+        return False, str(e), None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -350,40 +407,55 @@ def main():
                     so_agg = get_sellout_agregado_by_ean_pdv(ean_str)
                 st.session_state["sellout_agregado"] = so_agg
 
-                if so_agg["tiene_datos"]:
-                    if not _hv_tmp.get("ventas_por_mes"):
-                        st.session_state["ventas_mes_total"] = so_agg["ventas_prom_total"]
-                    if not _hv_tmp.get("venta_prom_mes_otc"):
-                        st.session_state["ventas_mes_otc"]   = so_agg["ventas_prom_otc"]
-                    if not _hv_tmp.get("venta_prom_mes_foot_care"):
-                        st.session_state["ventas_mes_foot"]  = so_agg["ventas_prom_foot"]
+                # ── Rankings PDV ──────────────────────────────────────────────
+                with st.spinner("Calculando rankings..."):
+                    rk_data = get_ranking_pdv(ean_str)
+                st.session_state["rk_pdv_nac"]     = rk_data["ranking_nacional"]
+                st.session_state["rk_pdv_cad_nac"] = rk_data["ranking_cadena_nacional"]
+                st.session_state["rk_pdv_cad_reg"] = rk_data["ranking_cadena_regional"]
 
-                    if not _hv_tmp.get("top_marcas_mas_vendidas"):
-                        _sm = sorted(
-                            so_agg["sell_out_marcas"].items(),
-                            key=lambda x: x[1].get("prom_mes_2026") or x[1].get("prom_mes_2025", 0),
-                            reverse=True
-                        )[:5]
+                if so_agg["tiene_datos"]:
+                    # SELL OUT siempre tiene prioridad sobre hoja_vida (se actualiza cada 3-4 meses)
+                    st.session_state["ventas_mes_total"] = so_agg["ventas_prom_total"] or int(_hv_tmp.get("ventas_por_mes") or 0)
+                    st.session_state["ventas_mes_otc"]   = so_agg["ventas_prom_otc"]   or int(_hv_tmp.get("venta_prom_mes_otc") or 0)
+                    st.session_state["ventas_mes_foot"]  = so_agg["ventas_prom_foot"]  or int(_hv_tmp.get("venta_prom_mes_foot_care") or 0)
+
+                    # Top marcas: so primero, hv como fallback
+                    _sm = sorted(
+                        so_agg["sell_out_marcas"].items(),
+                        key=lambda x: x[1].get("prom_mes_2026") or x[1].get("prom_mes_2025", 0),
+                        reverse=True
+                    )[:5]
+                    if _sm:
                         for idx, (m, v) in enumerate(_sm, 1):
                             st.session_state[f"marca_{idx}"]     = m
                             st.session_state[f"vta_marca_{idx}"] = int(v.get("prom_mes_2026") or v.get("prom_mes_2025", 0))
+                    elif _hv_tmp.get("top_marcas_mas_vendidas"):
+                        for idx, _mp in enumerate(_hv_tmp["top_marcas_mas_vendidas"][:5], 1):
+                            st.session_state[f"marca_{idx}"]     = _mp.get("marca", "") if isinstance(_mp, dict) else ""
+                            st.session_state[f"vta_marca_{idx}"] = int(_mp.get("vtas_prom_mes", 0) if isinstance(_mp, dict) else 0)
 
-                    if not _hv_tmp.get("top_skus_mas_vendidos"):
-                        _ss = sorted(
-                            so_agg["sell_out_skus"].items(),
-                            key=lambda x: x[1].get("prom_mes_2026") or x[1].get("prom_mes_2025", 0),
-                            reverse=True
-                        )[:5]
+                    # Top SKUs: so primero, hv como fallback
+                    _ss = sorted(
+                        so_agg["sell_out_skus"].items(),
+                        key=lambda x: x[1].get("prom_mes_2026") or x[1].get("prom_mes_2025", 0),
+                        reverse=True
+                    )[:5]
+                    if _ss:
                         for idx, (s, v) in enumerate(_ss, 1):
                             st.session_state[f"sku_{idx}"]     = s
                             st.session_state[f"vta_sku_{idx}"] = int(v.get("prom_mes_2026") or v.get("prom_mes_2025", 0))
+                    elif _hv_tmp.get("top_skus_mas_vendidos"):
+                        for idx, _sp in enumerate(_hv_tmp["top_skus_mas_vendidos"][:5], 1):
+                            st.session_state[f"sku_{idx}"]     = _sp.get("sku", "") if isinstance(_sp, dict) else ""
+                            st.session_state[f"vta_sku_{idx}"] = int(_sp.get("vtas_prom_mes", 0) if isinstance(_sp, dict) else 0)
 
-                    if not _hv_tmp.get("sell_out"):
-                        for mes_n, vals in so_agg["sell_out_mensual"].items():
-                            st.session_state[f"so_p20_{mes_n}"] = vals["sell_out_mes_2025"]
-                            st.session_state[f"so_p21_{mes_n}"] = vals["sell_out_mes_2026"]
-                            st.session_state[f"so_a20_{mes_n}"] = vals["sell_out_acum_2025"]
-                            st.session_state[f"so_a21_{mes_n}"] = vals["sell_out_acum_2026"]
+                    # Sell Out mensual: so SIEMPRE reemplaza hv (datos frescos cada 3-4 meses)
+                    for mes_n, vals in so_agg["sell_out_mensual"].items():
+                        st.session_state[f"so_p20_{mes_n}"] = vals["sell_out_mes_2025"]
+                        st.session_state[f"so_p21_{mes_n}"] = vals["sell_out_mes_2026"]
+                        st.session_state[f"so_a20_{mes_n}"] = vals["sell_out_acum_2025"]
+                        st.session_state[f"so_a21_{mes_n}"] = vals["sell_out_acum_2026"]
                 else:
                     st.session_state["sellout_agregado"] = None
             else:
@@ -463,12 +535,20 @@ def main():
                             value=_v("nombre_cargo_contacto"))
 
     with col2:
+        # Rankings: session_state (calculado de sellout) > hoja_vida guardada > vacío
+        _rk_nac_val     = st.session_state.get("rk_pdv_nac")     or _v("ranking_pdv_total_nacional")
+        _rk_cad_nac_val = st.session_state.get("rk_pdv_cad_nac") or _v("ranking_pdv_cadena_nacional")
+        _rk_cad_reg_val = st.session_state.get("rk_pdv_cad_reg") or _v("ranking_pdv_cadena_regional")
+
         ranking_nac     = st.text_input("Ranking PDV total nacional",
-                            value=_v("ranking_pdv_total_nacional"))
+                            value=_rk_nac_val,
+                            help="Posición del PDV vs todos los PDVs del país por venta promedio mensual")
         ranking_cad_nac = st.text_input("Ranking PDV cadena nacional",
-                            value=_v("ranking_pdv_cadena_nacional"))
+                            value=_rk_cad_nac_val,
+                            help="Posición dentro de su cadena a nivel nacional")
         ranking_cad_reg = st.text_input("Ranking PDV cadena regional",
-                            value=_v("ranking_pdv_cadena_regional"))
+                            value=_rk_cad_reg_val,
+                            help="Posición dentro de su cadena + zona Nielsen")
         ranking_zona    = st.text_input("Ranking PDV zona asignada",
                             value=_v("ranking_pdv_zona_asignada"))
         tiene_domicilio = st.radio("¿Tiene domicilio?", ["Sí", "No"], horizontal=True)
@@ -531,11 +611,14 @@ def main():
 
     col11, col12, col13 = st.columns(3)
     with col11:
-        ventas_mes = st.number_input("Venta prom. mes total ($)", 0, step=1000, key="ventas_mes_total")
+        ventas_mes = st.number_input("Venta prom. mes total ($)", 0, step=1000, key="ventas_mes_total", format="%d")
+        st.caption(f"$ {fmt_cop(ventas_mes)} COP")
     with col12:
-        venta_otc  = st.number_input("Venta prom. mes OTC ($)",   0, step=1000, key="ventas_mes_otc")
+        venta_otc  = st.number_input("Venta prom. mes OTC ($)", 0, step=1000, key="ventas_mes_otc", format="%d")
+        st.caption(f"$ {fmt_cop(venta_otc)} COP")
     with col13:
-        venta_foot = st.number_input("Venta prom. mes Foot Care ($)", 0, step=1000, key="ventas_mes_foot")
+        venta_foot = st.number_input("Venta prom. mes Foot Care ($)", 0, step=1000, key="ventas_mes_foot", format="%d")
+        st.caption(f"$ {fmt_cop(venta_foot)} COP")
 
     st.markdown("**Top marcas más vendidas**")
     _marcas_ss = [st.session_state.get(f"marca_{i}", "") for i in range(1, 6)]
@@ -572,7 +655,8 @@ def main():
             marca = st.text_input(f"Marca {i}", key=f"marca_{i}")
         with c2:
             vta_m = st.number_input(f"Vtas prom mes marca {i}", 0, step=1000,
-                        key=f"vta_marca_{i}", label_visibility="visible")
+                        key=f"vta_marca_{i}", label_visibility="visible", format="%d")
+            st.caption(f"$ {fmt_cop(vta_m)} COP")
         marcas.append({"marca": marca, "vtas_prom_mes": vta_m})
 
     st.markdown("**Top SKUs más vendidos**")
@@ -610,7 +694,8 @@ def main():
             sku = st.text_input(f"SKU {i}", key=f"sku_{i}")
         with c2:
             vta_s = st.number_input(f"Vtas prom mes SKU {i}", 0, step=1000,
-                        key=f"vta_sku_{i}", label_visibility="visible")
+                        key=f"vta_sku_{i}", label_visibility="visible", format="%d")
+            st.caption(f"$ {fmt_cop(vta_s)} COP")
         skus.append({"sku": sku, "vtas_prom_mes": vta_s})
 
     # ══════════════════════════════════════════════════════════════════
@@ -656,16 +741,16 @@ def main():
         cols = st.columns([2, 1, 1, 1, 0.2, 1, 1, 1])
         cols[0].markdown(mes)
         p20 = cols[1].number_input(f"Mes 2025 {mes}", 0, step=1000, key=f"so_p20_{mes}",
-                label_visibility="collapsed")
+                label_visibility="collapsed", format="%d")
         p21 = cols[2].number_input(f"Mes 2026 {mes}", 0, step=1000, key=f"so_p21_{mes}",
-                label_visibility="collapsed")
+                label_visibility="collapsed", format="%d")
         var_p = round(((p21 - p20) / p20 * 100) if p20 > 0 else 0.0, 1)
         cols[3].markdown(f"<div style='text-align:center;padding-top:8px;color:{'green' if var_p >= 0 else 'red'};'><b>{var_p:+.1f}%</b></div>", unsafe_allow_html=True)
         cols[4].markdown("")
         a20 = cols[5].number_input(f"Acum 2025 {mes}", 0, step=1000, key=f"so_a20_{mes}",
-                label_visibility="collapsed")
+                label_visibility="collapsed", format="%d")
         a21 = cols[6].number_input(f"Acum 2026 {mes}", 0, step=1000, key=f"so_a21_{mes}",
-                label_visibility="collapsed")
+                label_visibility="collapsed", format="%d")
         var_a = round(((a21 - a20) / a20 * 100) if a20 > 0 else 0.0, 1)
         cols[7].markdown(f"<div style='text-align:center;padding-top:8px;color:{'green' if var_a >= 0 else 'red'};'><b>{var_a:+.1f}%</b></div>", unsafe_allow_html=True)
         sell_out_data.append({
@@ -674,6 +759,7 @@ def main():
             "sell_out_acum_2020": a20, "sell_out_acum_2021": a21, "var_pct_acum": var_a,
         })
 
+    # Fila TOTAL
     totales_cols = st.columns([2, 1, 1, 1, 0.2, 1, 1, 1])
     tot_p20 = sum(r["sell_out_mes_2020"] for r in sell_out_data)
     tot_p21 = sum(r["sell_out_mes_2021"] for r in sell_out_data)
@@ -684,12 +770,12 @@ def main():
 
     style_total = "background:#b8cce4;padding:4px 6px;border-radius:4px;font-weight:700;font-size:0.82rem;"
     totales_cols[0].markdown(f"<div style='{style_total}'>TOTAL</div>", unsafe_allow_html=True)
-    totales_cols[1].markdown(f"<div style='{style_total}'>{tot_p20:,.0f}</div>", unsafe_allow_html=True)
-    totales_cols[2].markdown(f"<div style='{style_total}'>{tot_p21:,.0f}</div>", unsafe_allow_html=True)
+    totales_cols[1].markdown(f"<div style='{style_total}'>$ {fmt_cop(tot_p20)}</div>", unsafe_allow_html=True)
+    totales_cols[2].markdown(f"<div style='{style_total}'>$ {fmt_cop(tot_p21)}</div>", unsafe_allow_html=True)
     totales_cols[3].markdown(f"<div style='{style_total};color:{'green' if var_tp >= 0 else 'red'}'>{var_tp:+.1f}%</div>", unsafe_allow_html=True)
     totales_cols[4].markdown("")
-    totales_cols[5].markdown(f"<div style='{style_total}'>{tot_a20:,.0f}</div>", unsafe_allow_html=True)
-    totales_cols[6].markdown(f"<div style='{style_total}'>{tot_a21:,.0f}</div>", unsafe_allow_html=True)
+    totales_cols[5].markdown(f"<div style='{style_total}'>$ {fmt_cop(tot_a20)}</div>", unsafe_allow_html=True)
+    totales_cols[6].markdown(f"<div style='{style_total}'>$ {fmt_cop(tot_a21)}</div>", unsafe_allow_html=True)
     totales_cols[7].markdown(f"<div style='{style_total};color:{'green' if var_ta >= 0 else 'red'}'>{var_ta:+.1f}%</div>", unsafe_allow_html=True)
 
     st.markdown("---")
@@ -1142,10 +1228,13 @@ def main():
         }
 
         with st.spinner("Guardando en Supabase..."):
-            ok, result = insertar_hoja_vida(payload)
+            ok, result, accion = upsert_hoja_vida(payload)
 
         if ok:
-            st.success(f"✅ Registro guardado exitosamente. ID: **{result}**")
+            if accion == 'actualizado':
+                st.success(f"✅ Registro **actualizado** exitosamente. ID: {result}")
+            else:
+                st.success(f"✅ Registro **insertado** exitosamente. ID: {result}")
             st.balloons()
         else:
             st.error(f"❌ Error al guardar: {result}")
