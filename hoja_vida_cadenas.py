@@ -8,7 +8,7 @@ App Streamlit — Pre-llenado automático desde universo + Sell Out desde BD
 import streamlit as st
 from collections import defaultdict
 from supabase import create_client
-
+import datetime
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 0. CONEXION SUPABASE
@@ -271,31 +271,55 @@ def get_hoja_vida_existente(nombre_pdv: str) -> dict | None:
     
 def upsert_hoja_vida(data: dict):
     """
-    Si el PDV ya tiene registro en hoja_vida_cadenas_farmacias, actualiza.
-    Si no existe, inserta. Retorna (True, id, accion) o (False, msg, None).
+    Upsert atómico usando on_conflict sobre punto_de_venta.
+    Incluye control de concurrencia optimista con updated_at.
+    Retorna (True, id, accion) o (False, msg, None).
     """
     try:
-        existing = (
+        pdv = data.get("punto_de_venta", "")
+
+        # Leer id y updated_at actuales ANTES de guardar
+        check = (
             supabase
             .table("hoja_vida_supermercados")
-            .select("id")
-            .eq("punto_de_venta", data.get("punto_de_venta", ""))
+            .select("id, updated_at")
+            .eq("punto_de_venta", pdv)
             .limit(1)
             .execute()
         )
-        if existing.data:
-            record_id = existing.data[0]["id"]
-            supabase                 .table("hoja_vida_supermercados")                 .update(data)                 .eq("id", record_id)                 .execute()
-            return True, record_id, "actualizado"
+
+        if check.data:
+            record_id     = check.data[0]["id"]
+            updated_at_bd = check.data[0].get("updated_at")
+            updated_at_ss = st.session_state.get("_hv_updated_at")
+
+            # Control optimista: detectar si otro usuario guardó mientras tanto
+            if updated_at_bd and updated_at_ss and updated_at_bd != updated_at_ss:
+                return False, (
+                    "⚠️ Este PDV fue modificado por otro usuario mientras lo editabas. "
+                    "Recarga la página para ver la versión más reciente antes de guardar."
+                ), None
+            accion = "actualizado"
         else:
-            response = (
-                supabase
-                .table("hoja_vida_supermercados")
-                .insert(data)
-                .execute()
-            )
-            inserted_id = response.data[0]["id"] if response.data else None
-            return True, inserted_id, "insertado"
+            record_id = None
+            accion    = "insertado"
+
+        # Upsert atómico — elimina la race condition del SELECT + INSERT/UPDATE separados
+        data["updated_at"] = datetime.datetime.utcnow().isoformat()
+        response = (
+            supabase
+            .table("hoja_vida_supermercados")
+            .upsert(data, on_conflict="punto_de_venta")
+            .execute()
+        )
+        result_id = response.data[0]["id"] if response.data else record_id
+
+        # Actualizar updated_at en session para futuros guardados en la misma sesión
+        if response.data and response.data[0].get("updated_at"):
+            st.session_state["_hv_updated_at"] = response.data[0]["updated_at"]
+
+        return True, result_id, accion
+
     except Exception as e:
         return False, str(e), None
 
@@ -398,6 +422,7 @@ def main():
             nombre_pdv_buscar = pdv_info.get("nombre_pdv_en_tdr", pdv_sel)
             hv_existente = get_hoja_vida_existente(nombre_pdv_buscar)
             st.session_state["hoja_vida_existente"] = hv_existente
+            st.session_state["_hv_updated_at"] = hv_existente.get("updated_at") if hv_existente else None
             _hv_tmp = hv_existente or {}
 
             ean_pdv = pdv_info.get("ean_pdv", "")
