@@ -7,23 +7,9 @@ App Streamlit — Sin st.form, dinámico + Excel + PDF cédula por correo
 
 
 import streamlit as st
-import holidays
-import datetime
-import smtplib
-import os
-import io
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-
-
-import openpyxl
-from openpyxl.drawing.image import Image as XLImage
-from openpyxl.utils.cell import coordinate_from_string
-from openpyxl.utils import column_index_from_string as col_idx
-import urllib.request
+from collections import defaultdict
 from supabase import create_client
+import datetime
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -158,7 +144,6 @@ def get_sellout_agregado_by_ean_pdv(ean_pdv) -> dict:
     - Foot Care = MEXSANA*, ACID MANTLE*, BEPANTHEN
     - OTC = resto
     """
-    from collections import defaultdict
 
     ORDEN_MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                    "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
