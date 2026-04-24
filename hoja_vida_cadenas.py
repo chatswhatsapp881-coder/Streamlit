@@ -87,24 +87,24 @@ def get_formatos_by_segmento(segmento_nielsen: str):
     data = _fetch_all(
         lambda s, e: supabase
             .table("universo")
-            .select("formato_cadena")
+            .select("comerciante_red")
             .eq("segmento_nielsen", segmento_nielsen)
-            .not_.is_("formato_cadena", "null")
+            .not_.is_("comerciante_red", "null")
             .range(s, e)
             .execute()
     )
-    valores = sorted({r["formato_cadena"] for r in data if r["formato_cadena"]})
+    valores = sorted({r["comerciante_red"] for r in data if r["comerciante_red"]})
     return ["— Seleccione —"] + valores
 
 
 @st.cache_data(ttl=300)
-def get_pdvs_by_segmento_formato(segmento_nielsen: str, formato_cadena: str):
+def get_pdvs_by_segmento_formato(segmento_nielsen: str, comerciante_red: str):
     data = _fetch_all(
         lambda s, e: supabase
             .table("universo")
             .select("nombre_pdv_en_tdr")
             .eq("segmento_nielsen", segmento_nielsen)
-            .eq("formato_cadena", formato_cadena)
+            .eq("comerciante_red", comerciante_red)
             .not_.is_("nombre_pdv_en_tdr", "null")
             .range(s, e)
             .execute()
@@ -113,13 +113,13 @@ def get_pdvs_by_segmento_formato(segmento_nielsen: str, formato_cadena: str):
     return ["— Seleccione —"] + valores
 
 
-def get_pdv_info(segmento_nielsen: str, formato_cadena: str, nombre_pdv: str) -> dict | None:
+def get_pdv_info(segmento_nielsen: str, comerciante_red: str, nombre_pdv: str) -> dict | None:
     res = (
         supabase
         .table("universo")
         .select("*")
         .eq("segmento_nielsen", segmento_nielsen)
-        .eq("formato_cadena", formato_cadena)
+        .eq("comerciante_red", comerciante_red)
         .eq("nombre_pdv_en_tdr", nombre_pdv)
         .limit(1)
         .execute()
@@ -537,7 +537,7 @@ def main():
         fecha_info = st.date_input("Fecha información (D/M/A)")
 
         _cadenas_opts = ["Exito", "Carulla", "Surtumax", "Cencosud", "Jumbo", "Metro", "Olimpica"]
-        _cadena_val = _hv.get("nombre_cadena") or _u.get("formato_cadena", "")
+        _cadena_val = _hv.get("nombre_cadena") or _u.get("comerciante_red", "")
         _cadena_idx = 0
         if _cadena_val:
             for _i, _opt in enumerate(_cadenas_opts):
