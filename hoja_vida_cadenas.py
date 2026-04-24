@@ -42,6 +42,18 @@ LOGOS_CADENAS = [
 ]
 
 
+
+# Logos por formato_cadena para ALMACENES EXITO S.A.
+LOGOS_EXITO = {
+    "EXITO":           "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3e/%C3%89xito_logo.svg/320px-%C3%89xito_logo.svg.png",
+    "EXITO EXPRESS":   "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3e/%C3%89xito_logo.svg/320px-%C3%89xito_logo.svg.png",
+    "CARULLA":         "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Carulla_logo.svg/320px-Carulla_logo.svg.png",
+    "CARULLA EXPRESS": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Carulla_logo.svg/320px-Carulla_logo.svg.png",
+    "SURTIMAX":        "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ4oHvVWOJvxFVhWpbP0fM8pZ5Iij_YAsmVpA&s",
+    "SURTIMAYORISTA":  "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ4oHvVWOJvxFVhWpbP0fM8pZ5Iij_YAsmVpA&s",
+    "SUPER INTER":     "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRg4RlhZJhW5lBSfGbXEGX1c8h2JLGLVWOqaA&s",
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. FUNCIONES AUXILIARES
 # ─────────────────────────────────────────────────────────────────────────────
@@ -415,12 +427,11 @@ def main():
     _u  = st.session_state.get("pdv_universo") or {}
     _so = st.session_state.get("sellout_agregado") or {}
 
-    col_f1, col_f2, col_f3 = st.columns(3)
-
+    # ── Fila 1: Segmento + Comercio ──
+    col_f1, col_f2 = st.columns(2)
     with col_f1:
         segmentos = get_segmentos_nielsen()
         seg_sel = st.selectbox("1. Segmento Nielsen", segmentos, key="univ_segmento")
-
     with col_f2:
         if seg_sel and seg_sel != "— Seleccione —":
             formatos = get_formatos_by_segmento(seg_sel)
@@ -429,42 +440,45 @@ def main():
         fmt_sel = st.selectbox("2. Comercio", formatos, key="univ_formato",
                                disabled=(seg_sel == "— Seleccione —"))
 
-    with col_f3:
+    # ── Fila 2: Formato Cadena (solo Exito) + PDV ──
+    _es_exito = fmt_sel == "ALMACENES EXITO S.A."
+    _fmt_cadena_sel = None
+
+    if _es_exito and fmt_sel != "— Seleccione —":
+        _formatos_exito = get_formato_cadena_by_comerciante(seg_sel, fmt_sel)
+        _opts_exito = ["— Seleccione —"] + (_formatos_exito if _formatos_exito else [])
+        col_fc, col_pdv = st.columns(2)
+        with col_fc:
+            _fmt_cadena_sel = st.selectbox(
+                "3. Formato Cadena",
+                _opts_exito,
+                key="univ_fmt_cadena"
+            )
+            if _fmt_cadena_sel == "— Seleccione —":
+                _fmt_cadena_sel = None
+        with col_pdv:
+            if _fmt_cadena_sel:
+                pdvs = get_pdvs_by_formato_cadena(seg_sel, fmt_sel, _fmt_cadena_sel)
+            else:
+                pdvs = ["— Seleccione —"]
+            pdv_sel = st.selectbox(
+                "4. Nombre PDV (TDR)",
+                pdvs,
+                key="univ_pdv",
+                disabled=(_fmt_cadena_sel is None)
+            )
+    else:
+        # Flujo normal sin Exito
         if fmt_sel and fmt_sel != "— Seleccione —":
             pdvs = get_pdvs_by_segmento_formato(seg_sel, fmt_sel)
         else:
             pdvs = ["— Seleccione —"]
-        pdv_sel = st.selectbox("3. Nombre PDV (TDR)", pdvs, key="univ_pdv",
-                               disabled=(fmt_sel == "— Seleccione —"))
-
-    # ── Filtro extra: Formato Cadena + Logo (solo para ALMACENES EXITO S.A.) ──
-    _es_exito = fmt_sel == "ALMACENES EXITO S.A."
-    _fmt_cadena_sel = None
-    if _es_exito:
-        _formatos_exito = get_formato_cadena_by_comerciante(seg_sel, fmt_sel)
-        if _formatos_exito:
-            _opts_exito = ["— Seleccione —"] + _formatos_exito
-            col_ex1, col_ex2 = st.columns([2, 1])
-            with col_ex1:
-                _fmt_cadena_sel = st.selectbox(
-                    "3a. Formato Cadena Éxito",
-                    _opts_exito,
-                    key="univ_fmt_cadena",
-                    help="Sub-formato dentro de Éxito (Carulla, Éxito Express, etc.)"
-                )
-                if _fmt_cadena_sel == "— Seleccione —":
-                    _fmt_cadena_sel = None
-            # Refinar lista de PDVs por formato_cadena si ya esta seleccionado
-            if _fmt_cadena_sel:
-                pdvs = get_pdvs_by_formato_cadena(seg_sel, fmt_sel, _fmt_cadena_sel)
-                pdv_sel = st.selectbox(
-                    "3b. Nombre PDV (TDR)",
-                    pdvs,
-                    key="univ_pdv_exito",
-                    disabled=(not pdvs or pdvs == ["— Seleccione —"])
-                )
-        else:
-            st.info("No se encontraron formatos de cadena para Éxito en el universo.")
+        pdv_sel = st.selectbox(
+            "3. Nombre PDV (TDR)",
+            pdvs,
+            key="univ_pdv",
+            disabled=(fmt_sel == "— Seleccione —")
+        )
 
     _pdv_anterior = st.session_state.get("_pdv_cargado", "")
     if pdv_sel and pdv_sel != "— Seleccione —":
