@@ -426,7 +426,7 @@ def main():
             formatos = get_formatos_by_segmento(seg_sel)
         else:
             formatos = ["— Seleccione —"]
-        fmt_sel = st.selectbox("2. Formato Cadena", formatos, key="univ_formato",
+        fmt_sel = st.selectbox("2. Comercio", formatos, key="univ_formato",
                                disabled=(seg_sel == "— Seleccione —"))
 
     with col_f3:

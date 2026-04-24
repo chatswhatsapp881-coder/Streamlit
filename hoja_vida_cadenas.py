@@ -97,6 +97,46 @@ def get_formatos_by_segmento(segmento_nielsen: str):
     return ["— Seleccione —"] + valores
 
 
+
+@st.cache_data(ttl=300)
+def get_formato_cadena_by_comerciante(segmento_nielsen: str, comerciante_red: str):
+    """Trae formato_cadena y logo distintos (para ALMACENES EXITO S.A.)."""
+    data = _fetch_all(
+        lambda s, e: supabase
+            .table("universo")
+            .select("formato_cadena, logo")
+            .eq("segmento_nielsen", segmento_nielsen)
+            .eq("comerciante_red", comerciante_red)
+            .not_.is_("formato_cadena", "null")
+            .range(s, e)
+            .execute()
+    )
+    seen = {}
+    for r in data:
+        fc = (r.get("formato_cadena") or "").strip()
+        if fc and fc not in seen:
+            seen[fc] = (r.get("logo") or "").strip()
+    return seen  # {formato_cadena: logo_url}
+
+
+@st.cache_data(ttl=300)
+def get_pdvs_by_formato_cadena(segmento_nielsen: str, comerciante_red: str, formato_cadena: str):
+    """Filtra PDVs por segmento + comerciante + formato_cadena."""
+    data = _fetch_all(
+        lambda s, e: supabase
+            .table("universo")
+            .select("nombre_pdv_en_tdr")
+            .eq("segmento_nielsen", segmento_nielsen)
+            .eq("comerciante_red", comerciante_red)
+            .eq("formato_cadena", formato_cadena)
+            .not_.is_("nombre_pdv_en_tdr", "null")
+            .range(s, e)
+            .execute()
+    )
+    valores = sorted({r["nombre_pdv_en_tdr"] for r in data if r["nombre_pdv_en_tdr"]})
+    return ["— Seleccione —"] + valores
+
+
 @st.cache_data(ttl=300)
 def get_pdvs_by_segmento_formato(segmento_nielsen: str, comerciante_red: str):
     data = _fetch_all(
@@ -113,17 +153,18 @@ def get_pdvs_by_segmento_formato(segmento_nielsen: str, comerciante_red: str):
     return ["— Seleccione —"] + valores
 
 
-def get_pdv_info(segmento_nielsen: str, comerciante_red: str, nombre_pdv: str) -> dict | None:
-    res = (
+def get_pdv_info(segmento_nielsen: str, comerciante_red: str, nombre_pdv: str, formato_cadena: str | None = None) -> dict | None:
+    q = (
         supabase
         .table("universo")
         .select("*")
         .eq("segmento_nielsen", segmento_nielsen)
         .eq("comerciante_red", comerciante_red)
         .eq("nombre_pdv_en_tdr", nombre_pdv)
-        .limit(1)
-        .execute()
     )
+    if formato_cadena:
+        q = q.eq("formato_cadena", formato_cadena)
+    res = q.limit(1).execute()
     return res.data[0] if res.data else None
 
 
@@ -389,7 +430,7 @@ def main():
             formatos = get_formatos_by_segmento(seg_sel)
         else:
             formatos = ["— Seleccione —"]
-        fmt_sel = st.selectbox("2. Formato Cadena", formatos, key="univ_formato",
+        fmt_sel = st.selectbox("2. Comercio", formatos, key="univ_formato",
                                disabled=(seg_sel == "— Seleccione —"))
 
     with col_f3:
@@ -400,9 +441,41 @@ def main():
         pdv_sel = st.selectbox("3. Nombre PDV (TDR)", pdvs, key="univ_pdv",
                                disabled=(fmt_sel == "— Seleccione —"))
 
+    # ── Filtro extra: Formato Cadena + Logo (solo para ALMACENES EXITO S.A.) ──
+    _es_exito = fmt_sel == "ALMACENES EXITO S.A."
+    _fmt_cadena_sel = None
+    if _es_exito:
+        _formatos_exito = get_formato_cadena_by_comerciante(seg_sel, fmt_sel)
+        if _formatos_exito:
+            _opts_exito = ["— Seleccione —"] + sorted(_formatos_exito.keys())
+            col_ex1, col_ex2 = st.columns([2, 1])
+            with col_ex1:
+                _fmt_cadena_sel = st.selectbox(
+                    "3a. Formato Cadena Éxito",
+                    _opts_exito,
+                    key="univ_fmt_cadena",
+                    help="Sub-formato dentro de Éxito (Carulla, Éxito Express, etc.)"
+                )
+                if _fmt_cadena_sel == "— Seleccione —":
+                    _fmt_cadena_sel = None
+            with col_ex2:
+                if _fmt_cadena_sel and _formatos_exito.get(_fmt_cadena_sel):
+                    st.image(_formatos_exito[_fmt_cadena_sel], width=90, caption=_fmt_cadena_sel)
+            # Refinar lista de PDVs por formato_cadena si ya esta seleccionado
+            if _fmt_cadena_sel:
+                pdvs = get_pdvs_by_formato_cadena(seg_sel, fmt_sel, _fmt_cadena_sel)
+                pdv_sel = st.selectbox(
+                    "3b. Nombre PDV (TDR)",
+                    pdvs,
+                    key="univ_pdv_exito",
+                    disabled=(not pdvs or pdvs == ["— Seleccione —"])
+                )
+        else:
+            st.info("No se encontraron formatos de cadena para Éxito en el universo.")
+
     _pdv_anterior = st.session_state.get("_pdv_cargado", "")
     if pdv_sel and pdv_sel != "— Seleccione —":
-        pdv_info = get_pdv_info(seg_sel, fmt_sel, pdv_sel)
+        pdv_info = get_pdv_info(seg_sel, fmt_sel, pdv_sel, formato_cadena=_fmt_cadena_sel)
         st.session_state["pdv_universo"] = pdv_info
 
         if pdv_info and pdv_sel != _pdv_anterior:
