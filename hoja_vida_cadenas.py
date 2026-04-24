@@ -104,19 +104,15 @@ def get_formato_cadena_by_comerciante(segmento_nielsen: str, comerciante_red: st
     data = _fetch_all(
         lambda s, e: supabase
             .table("universo")
-            .select("formato_cadena, logo")
+            .select("formato_cadena")
             .eq("segmento_nielsen", segmento_nielsen)
             .eq("comerciante_red", comerciante_red)
             .not_.is_("formato_cadena", "null")
             .range(s, e)
             .execute()
     )
-    seen = {}
-    for r in data:
-        fc = (r.get("formato_cadena") or "").strip()
-        if fc and fc not in seen:
-            seen[fc] = (r.get("logo") or "").strip()
-    return seen  # {formato_cadena: logo_url}
+    formatos = sorted({(r.get("formato_cadena") or "").strip() for r in data if r.get("formato_cadena")})
+    return formatos  # lista ordenada de formato_cadena
 
 
 @st.cache_data(ttl=300)
@@ -447,7 +443,7 @@ def main():
     if _es_exito:
         _formatos_exito = get_formato_cadena_by_comerciante(seg_sel, fmt_sel)
         if _formatos_exito:
-            _opts_exito = ["— Seleccione —"] + sorted(_formatos_exito.keys())
+            _opts_exito = ["— Seleccione —"] + _formatos_exito
             col_ex1, col_ex2 = st.columns([2, 1])
             with col_ex1:
                 _fmt_cadena_sel = st.selectbox(
@@ -458,9 +454,6 @@ def main():
                 )
                 if _fmt_cadena_sel == "— Seleccione —":
                     _fmt_cadena_sel = None
-            with col_ex2:
-                if _fmt_cadena_sel and _formatos_exito.get(_fmt_cadena_sel):
-                    st.image(_formatos_exito[_fmt_cadena_sel], width=90, caption=_fmt_cadena_sel)
             # Refinar lista de PDVs por formato_cadena si ya esta seleccionado
             if _fmt_cadena_sel:
                 pdvs = get_pdvs_by_formato_cadena(seg_sel, fmt_sel, _fmt_cadena_sel)
