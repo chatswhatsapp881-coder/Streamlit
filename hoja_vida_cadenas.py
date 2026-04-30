@@ -9,6 +9,8 @@ import streamlit as st
 from collections import defaultdict
 from supabase import create_client
 import datetime
+import json
+from pathlib import Path
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 0. CONEXION SUPABASE
@@ -17,6 +19,125 @@ import datetime
 SUPABASE_URL = "https://oofpblylbudmpeppqbou.supabase.co"
 SUPABASE_KEY = "sb_publishable_BupeaEOOMqELWtuMzPvoVg_cOe0hXhl"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+STATE_TTL_HOURS = 12
+STATE_DIR = Path(__file__).resolve().parent / ".streamlit_state"
+
+
+def _utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _serialize_state_value(value):
+    if isinstance(value, datetime.datetime):
+        return {"__type__": "datetime", "value": value.isoformat()}
+    if isinstance(value, datetime.date):
+        return {"__type__": "date", "value": value.isoformat()}
+    if isinstance(value, dict):
+        return {str(k): _serialize_state_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_serialize_state_value(v) for v in value]
+    if isinstance(value, tuple):
+        return {"__type__": "tuple", "value": [_serialize_state_value(v) for v in value]}
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    raise TypeError("Valor no serializable")
+
+
+def _deserialize_state_value(value):
+    if isinstance(value, dict):
+        type_tag = value.get("__type__")
+        if type_tag == "datetime":
+            return datetime.datetime.fromisoformat(value["value"])
+        if type_tag == "date":
+            return datetime.date.fromisoformat(value["value"])
+        if type_tag == "tuple":
+            return tuple(_deserialize_state_value(v) for v in value["value"])
+        return {k: _deserialize_state_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_deserialize_state_value(v) for v in value]
+    return value
+
+
+def _get_state_sid() -> str:
+    # Si no llega sid en URL, usa un id estable por app para mantener estado tras refresh.
+    sid = st.query_params.get("sid")
+    if isinstance(sid, list):
+        sid = sid[0] if sid else None
+    if not sid:
+        sid = f"local-{Path(__file__).stem}"
+    return sid
+
+
+def _state_file(sid: str) -> Path:
+    safe_sid = "".join(ch for ch in sid if ch.isalnum() or ch in ("-", "_"))
+    return STATE_DIR / f"{safe_sid}.json"
+
+
+def _cleanup_expired_states():
+    if not STATE_DIR.exists():
+        return
+    limit = _utc_now() - datetime.timedelta(hours=STATE_TTL_HOURS)
+    for file_path in STATE_DIR.glob("*.json"):
+        try:
+            raw = json.loads(file_path.read_text(encoding="utf-8"))
+            saved_at = datetime.datetime.fromisoformat(raw.get("saved_at", ""))
+            if saved_at.tzinfo is None:
+                saved_at = saved_at.replace(tzinfo=datetime.timezone.utc)
+            if saved_at < limit:
+                file_path.unlink(missing_ok=True)
+        except Exception:
+            file_path.unlink(missing_ok=True)
+
+
+def _hydrate_state_once():
+    if st.session_state.get("_persist_loaded"):
+        return
+
+    _cleanup_expired_states()
+    sid = _get_state_sid()
+    st.session_state["_persist_sid"] = sid
+    state_path = _state_file(sid)
+
+    if state_path.exists():
+        try:
+            raw = json.loads(state_path.read_text(encoding="utf-8"))
+            saved_at = datetime.datetime.fromisoformat(raw.get("saved_at", ""))
+            if saved_at.tzinfo is None:
+                saved_at = saved_at.replace(tzinfo=datetime.timezone.utc)
+            is_fresh = saved_at >= (_utc_now() - datetime.timedelta(hours=STATE_TTL_HOURS))
+            if is_fresh:
+                restored = raw.get("session_state", {})
+                for k, v in restored.items():
+                    if k not in st.session_state:
+                        st.session_state[k] = _deserialize_state_value(v)
+            else:
+                state_path.unlink(missing_ok=True)
+        except Exception:
+            state_path.unlink(missing_ok=True)
+
+    st.session_state["_persist_loaded"] = True
+
+
+def _persist_state_snapshot():
+    sid = st.session_state.get("_persist_sid") or _get_state_sid()
+    st.session_state["_persist_sid"] = sid
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    persisted = {}
+    for k, v in st.session_state.items():
+        if k.startswith("_persist_"):
+            continue
+        try:
+            persisted[k] = _serialize_state_value(v)
+        except TypeError:
+            continue
+
+    payload = {
+        "saved_at": _utc_now().isoformat(),
+        "session_state": persisted,
+    }
+    _state_file(sid).write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -378,6 +499,8 @@ def upsert_hoja_vida(data: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+    _hydrate_state_once()
+
     st.markdown("""
     <style>
     .section-header {
@@ -921,12 +1044,19 @@ def main():
             else:
                 row[0].markdown("")
             row[1].markdown(f"<div style='padding-top:8px;'>{marca}</div>", unsafe_allow_html=True)
+            if f"som_peso_{marca}" not in st.session_state:
+                st.session_state[f"som_peso_{marca}"] = _peso_prev
+            if f"som_p20_{marca}" not in st.session_state:
+                st.session_state[f"som_p20_{marca}"] = _pm20_prev
+            if f"som_p21_{marca}" not in st.session_state:
+                st.session_state[f"som_p21_{marca}"] = _pm21_prev
+
             peso   = row[2].number_input(f"Peso% {marca}", 0.0, 100.0, step=0.1,
-                        value=_peso_prev, key=f"som_peso_{marca}", label_visibility="collapsed")
+                        key=f"som_peso_{marca}", label_visibility="collapsed")
             pm20   = row[3].number_input(f"Prom 2025 {marca}", 0, step=1000,
-                        value=_pm20_prev, key=f"som_p20_{marca}", label_visibility="collapsed")
+                        key=f"som_p20_{marca}", label_visibility="collapsed")
             pm21   = row[4].number_input(f"Prom 2026 {marca}", 0, step=1000,
-                        value=_pm21_prev, key=f"som_p21_{marca}", label_visibility="collapsed")
+                        key=f"som_p21_{marca}", label_visibility="collapsed")
             var_m  = round(((pm21 - pm20) / pm20 * 100) if pm20 > 0 else 0.0, 1)
             row[5].markdown(f"<div style='text-align:center;padding-top:8px;color:{'green' if var_m >= 0 else 'red'};'><b>{var_m:+.1f}%</b></div>", unsafe_allow_html=True)
             rows_div.append({"division": division, "marca": marca, "peso_pct": peso,
@@ -1343,6 +1473,8 @@ def main():
             st.balloons()
         else:
             st.error(f"❌ Error al guardar: {result}")
+
+    _persist_state_snapshot()
 
 
 if __name__ == "__main__":
