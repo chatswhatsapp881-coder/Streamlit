@@ -10,6 +10,7 @@ from collections import defaultdict
 from supabase import create_client
 import datetime
 import json
+import uuid
 from pathlib import Path
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,12 +61,18 @@ def _deserialize_state_value(value):
 
 
 def _get_state_sid() -> str:
-    # Si no llega sid en URL, usa un id estable por app para mantener estado tras refresh.
+    sid_ss = st.session_state.get("_persist_sid")
+    if sid_ss:
+        return sid_ss
+
     sid = st.query_params.get("sid")
     if isinstance(sid, list):
         sid = sid[0] if sid else None
     if not sid:
-        sid = f"local-{Path(__file__).stem}"
+        sid = str(uuid.uuid4())
+        st.query_params["sid"] = sid
+        st.session_state["_persist_need_rerun"] = True
+    st.session_state["_persist_sid"] = sid
     return sid
 
 
@@ -96,6 +103,8 @@ def _hydrate_state_once():
 
     _cleanup_expired_states()
     sid = _get_state_sid()
+    if st.session_state.pop("_persist_need_rerun", False):
+        st.rerun()
     st.session_state["_persist_sid"] = sid
     state_path = _state_file(sid)
 
