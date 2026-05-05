@@ -746,90 +746,124 @@ def main():
 
     col1, col2 = st.columns(2)
     with col1:
-        fecha_info = st.date_input("Fecha información (D/M/A)")
+        # ── Persistencia campos col1 ──
+        if "fecha_info" not in st.session_state:
+            _fi_raw = _hv.get("fecha_informacion")
+            try:
+                st.session_state["fecha_info"] = datetime.date.fromisoformat(str(_fi_raw)) if _fi_raw else datetime.date.today()
+            except Exception:
+                st.session_state["fecha_info"] = datetime.date.today()
+        fecha_info = st.date_input("Fecha información (D/M/A)", key="fecha_info")
 
-        _cadenas_opts = ["Exito", "Carulla", "Surtumax", "Cencosud", "Jumbo", "Metro", "Olimpica"]
-        _cadena_val = _hv.get("nombre_cadena") or _u.get("comerciante_red", "")
-        _cadena_idx = 0
-        if _cadena_val:
-            for _i, _opt in enumerate(_cadenas_opts):
-                if _opt.lower() == _cadena_val.lower():
-                    _cadena_idx = _i
-                    break
-        nombre_cadena   = st.selectbox("Nombre cadena", fmt_sel)
+        if "nombre_cadena_field" not in st.session_state:
+            st.session_state["nombre_cadena_field"] = _hv.get("nombre_cadena") or _u.get("comerciante_red", fmt_sel if fmt_sel != "— Seleccione —" else "")
+        nombre_cadena   = st.text_input("Nombre cadena", key="nombre_cadena_field")
 
-        punto_de_venta  = st.text_input("Punto de venta",
-                            value=_v("punto_de_venta", "nombre_pdv_en_tdr"))
-        dependenci_pdv  = st.text_input("Dependencia / Código SICOL PDV",
-                            value=_v("dependenci_pdv", "ean_pdv"))
-        telefono        = st.text_input("Teléfono",
-                            value=_v("telefono", "telefono_celular"))
-        direccion       = st.text_input("Dirección",
-                            value=_v("direccion", "direccion"))
-        nombre_gerente  = st.text_input("Nombre Gerente / Administrador PDV",
-                            value=_v("nombre_gerente_pdv"))
-        nombre_contacto = st.text_input("Nombre y cargo contacto clave",
-                            value=_v("nombre_cargo_contacto"))
+        if "punto_de_venta" not in st.session_state:
+            st.session_state["punto_de_venta"] = _v("punto_de_venta", "nombre_pdv_en_tdr")
+        punto_de_venta  = st.text_input("Punto de venta", key="punto_de_venta")
+
+        if "dependenci_pdv" not in st.session_state:
+            st.session_state["dependenci_pdv"] = _v("dependenci_pdv", "ean_pdv")
+        dependenci_pdv  = st.text_input("Dependencia / Código SICOL PDV", key="dependenci_pdv")
+
+        if "telefono" not in st.session_state:
+            st.session_state["telefono"] = _v("telefono", "telefono_celular")
+        telefono        = st.text_input("Teléfono", key="telefono")
+
+        if "direccion" not in st.session_state:
+            st.session_state["direccion"] = _v("direccion", "direccion")
+        direccion       = st.text_input("Dirección", key="direccion")
+
+        if "nombre_gerente_pdv" not in st.session_state:
+            st.session_state["nombre_gerente_pdv"] = _v("nombre_gerente_pdv")
+        nombre_gerente  = st.text_input("Nombre Gerente / Administrador PDV", key="nombre_gerente_pdv")
+
+        if "nombre_cargo_contacto" not in st.session_state:
+            st.session_state["nombre_cargo_contacto"] = _v("nombre_cargo_contacto")
+        nombre_contacto = st.text_input("Nombre y cargo contacto clave", key="nombre_cargo_contacto")
 
     with col2:
         # Rankings: session_state (calculado de sellout) > hoja_vida guardada > vacío
+        # Rankings: inicializar en session_state antes de renderizar
         _rk_nac_val     = st.session_state.get("rk_pdv_nac")     or _v("ranking_pdv_total_nacional")
         _rk_cad_nac_val = st.session_state.get("rk_pdv_cad_nac") or _v("ranking_pdv_cadena_nacional")
         _rk_cad_reg_val = st.session_state.get("rk_pdv_cad_reg") or _v("ranking_pdv_cadena_regional")
 
+        if "ranking_nac" not in st.session_state:
+            st.session_state["ranking_nac"] = _rk_nac_val
+        if "ranking_cad_nac" not in st.session_state:
+            st.session_state["ranking_cad_nac"] = _rk_cad_nac_val
+        if "ranking_cad_reg" not in st.session_state:
+            st.session_state["ranking_cad_reg"] = _rk_cad_reg_val
+        if "ranking_zona" not in st.session_state:
+            st.session_state["ranking_zona"] = _v("ranking_pdv_zona_asignada")
+        if "tiene_domicilio" not in st.session_state:
+            st.session_state["tiene_domicilio"] = _hv.get("tiene_domicilio", "No")
+
         ranking_nac     = st.text_input("Ranking PDV total nacional",
-                            value=_rk_nac_val,
+                            key="ranking_nac",
                             help="Posición del PDV vs todos los PDVs del país por venta promedio mensual")
         ranking_cad_nac = st.text_input("Ranking PDV cadena nacional",
-                            value=_rk_cad_nac_val,
+                            key="ranking_cad_nac",
                             help="Posición dentro de su cadena a nivel nacional")
         ranking_cad_reg = st.text_input("Ranking PDV cadena regional",
-                            value=_rk_cad_reg_val,
+                            key="ranking_cad_reg",
                             help="Posición dentro de su cadena + zona Nielsen")
-        ranking_zona    = st.text_input("Ranking PDV zona asignada",
-                            value=_v("ranking_pdv_zona_asignada"))
-        tiene_domicilio = st.radio("¿Tiene domicilio?", ["Sí", "No"], horizontal=True)
+        ranking_zona    = st.text_input("Ranking PDV zona asignada", key="ranking_zona")
+        tiene_domicilio = st.radio("¿Tiene domicilio?", ["Sí", "No"],
+                            key="tiene_domicilio", horizontal=True)
 
     st.markdown("**Domicilio**")
     col3, col4 = st.columns(2)
     with col3:
-        centralizado   = st.checkbox("Centralizado",
-                            value=bool(_hv.get("centralizado", False)))
-        pdv_check      = st.checkbox("PDV",
-                            value=bool(_hv.get("pdv", False)))
+        if "centralizado" not in st.session_state:
+            st.session_state["centralizado"] = bool(_hv.get("centralizado", False))
+        if "pdv_check" not in st.session_state:
+            st.session_state["pdv_check"] = bool(_hv.get("pdv", False))
+        centralizado   = st.checkbox("Centralizado", key="centralizado")
+        pdv_check      = st.checkbox("PDV", key="pdv_check")
 
     st.markdown("**Logística**")
     col9, col10 = st.columns(2)
     with col9:
-        _entrega_opts = ["Punto de venta", "Bodega central"]
-        _entrega_val  = _hv.get("entrega_de_mercancia", "Punto de venta")
-        _entrega_idx  = _entrega_opts.index(_entrega_val) if _entrega_val in _entrega_opts else 0
-        entrega_merc = st.radio("Entrega de mercancía", _entrega_opts,
-                            index=_entrega_idx, horizontal=True)
-
         DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
-        _dias_ped_prev = [d.strip() for d in str(_hv.get("dias_de_pedido", "")).split(",") if d.strip() in DIAS_SEMANA]
+
+        if "entrega_mercancia" not in st.session_state:
+            _entrega_val = _hv.get("entrega_de_mercancia", "Punto de venta")
+            st.session_state["entrega_mercancia"] = _entrega_val if _entrega_val in ["Punto de venta", "Bodega central"] else "Punto de venta"
+        entrega_merc = st.radio("Entrega de mercancía", ["Punto de venta", "Bodega central"],
+                            key="entrega_mercancia", horizontal=True)
+
+        if "dias_pedido" not in st.session_state:
+            st.session_state["dias_pedido"] = [d.strip() for d in str(_hv.get("dias_de_pedido", "")).split(",") if d.strip() in DIAS_SEMANA]
         dias_pedido = st.multiselect("Días de pedido", options=DIAS_SEMANA,
-                            default=_dias_ped_prev, placeholder="Seleccione uno o más días")
+                            key="dias_pedido", placeholder="Seleccione uno o más días")
 
-        _dias_vis_prev = [d.strip() for d in str(_hv.get("dias_de_visitas", "")).split(",") if d.strip() in DIAS_SEMANA]
+        if "dias_visita" not in st.session_state:
+            st.session_state["dias_visita"] = [d.strip() for d in str(_hv.get("dias_de_visitas", "")).split(",") if d.strip() in DIAS_SEMANA]
         dias_visita = st.multiselect("Días de visita", options=DIAS_SEMANA,
-                            default=_dias_vis_prev, placeholder="Seleccione uno o más días")
+                            key="dias_visita", placeholder="Seleccione uno o más días")
 
-        _op_log_val = _hv.get("tiene_operador_logistico", "No")
-        _op_log_idx = 0 if _op_log_val == "Sí" else 1
+        if "operador_log" not in st.session_state:
+            st.session_state["operador_log"] = _hv.get("tiene_operador_logistico", "No")
         operador_log = st.radio("¿Tiene operador logístico?", ["Sí", "No"],
-                            index=_op_log_idx, horizontal=True)
+                            key="operador_log", horizontal=True)
 
     with col10:
         _freq_opts = ["Diario", "Semanal", "2 veces x sem", "3 veces x sem"]
-        _freq_val  = _hv.get("frecuencia_de_pedido", "Diario")
-        _freq_idx  = _freq_opts.index(_freq_val) if _freq_val in _freq_opts else 0
-        frecuencia_ped = st.selectbox("Frecuencia de pedido", _freq_opts, index=_freq_idx)
-        horario_obs    = st.text_input("Horario recibo obsequios",
-                            value=_v("horario_recibo_obsequios"))
-        intensidad_h   = st.number_input("Intensidad horaria en la semana", 0, step=1,
-                            value=int(_hv.get("intensidad_horaria_semana", 0) or 0))
+        if "frecuencia_ped" not in st.session_state:
+            _freq_val = _hv.get("frecuencia_de_pedido", "Diario")
+            st.session_state["frecuencia_ped"] = _freq_val if _freq_val in _freq_opts else "Diario"
+        frecuencia_ped = st.selectbox("Frecuencia de pedido", _freq_opts, key="frecuencia_ped")
+
+        if "horario_obs" not in st.session_state:
+            st.session_state["horario_obs"] = _v("horario_recibo_obsequios")
+        horario_obs    = st.text_input("Horario recibo obsequios", key="horario_obs")
+
+        if "intensidad_h" not in st.session_state:
+            st.session_state["intensidad_h"] = int(_hv.get("intensidad_horaria_semana", 0) or 0)
+        intensidad_h   = st.number_input("Intensidad horaria en la semana", 0, step=1, key="intensidad_h")
 
     st.markdown("**Ventas promedio mensuales**")
 
@@ -1422,8 +1456,10 @@ def main():
     # VII. COMENTARIOS RELEVANTES
     # ══════════════════════════════════════════════════════════════════
     st.markdown('<div class="section-header">VII. COMENTARIOS RELEVANTES</div>', unsafe_allow_html=True)
+    if "comentarios_relevantes" not in st.session_state:
+        st.session_state["comentarios_relevantes"] = _hv.get("comentarios_relevnates", "")
     comentarios = st.text_area("Comentarios relevantes del PDV",
-                    value=_hv.get("comentarios_relevnates", ""),
+                    key="comentarios_relevantes",
                     height=120)
 
     st.divider()
