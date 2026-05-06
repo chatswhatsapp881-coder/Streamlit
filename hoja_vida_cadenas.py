@@ -12,6 +12,8 @@ import datetime
 import json
 import uuid
 from pathlib import Path
+import time
+import concurrent.futures
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 0. CONEXION SUPABASE
@@ -129,10 +131,15 @@ def _hydrate_state_once():
 
 
 def _persist_state_snapshot():
+    # OPTIMIZACIÓN: debounce — solo persistir si pasaron >= 2 s desde el último guardado
+    last_saved = st.session_state.get("_persist_last_saved_at", 0)
+    if (time.time() - last_saved) < 2.0:
+        return
+    st.session_state["_persist_last_saved_at"] = time.time()
+
     sid = st.session_state.get("_persist_sid") or _get_state_sid()
     st.session_state["_persist_sid"] = sid
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-
     persisted = {}
     for k, v in st.session_state.items():
         if k.startswith("_persist_"):
@@ -141,7 +148,6 @@ def _persist_state_snapshot():
             persisted[k] = _serialize_state_value(v)
         except TypeError:
             continue
-
     payload = {
         "saved_at": _utc_now().isoformat(),
         "session_state": persisted,
@@ -291,6 +297,7 @@ def get_pdvs_by_segmento_formato(segmento_nielsen: str, comerciante_red: str):
     return ["— Seleccione —"] + valores
 
 
+@st.cache_data(ttl=600)  # OPTIMIZACIÓN: caché 10 min — datos PDV no cambian frecuentemente
 def get_pdv_info(segmento_nielsen: str, comerciante_red: str, nombre_pdv: str, formato_cadena: str | None = None) -> dict | None:
     q = (
         supabase
@@ -306,6 +313,7 @@ def get_pdv_info(segmento_nielsen: str, comerciante_red: str, nombre_pdv: str, f
     return res.data[0] if res.data else None
 
 
+@st.cache_data(ttl=300)  # OPTIMIZACIÓN: caché sell-out 5 min
 def get_sellout_agregado_by_ean_pdv(ean_pdv) -> dict:
     ORDEN_MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                    "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
@@ -412,6 +420,7 @@ def get_sellout_agregado_by_ean_pdv(ean_pdv) -> dict:
         "anio_b":            ANIO_B,
     }
 
+@st.cache_data(ttl=300)  # OPTIMIZACIÓN: caché ranking 5 min
 def get_ranking_pdv(ean_pdv) -> dict:
     """
     Llama a la RPC get_ranking_pdv en Supabase.
@@ -516,6 +525,25 @@ def upsert_hoja_vida(data: dict):
     except Exception as e:
         return False, str(e), None
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIMIZACIÓN: carga paralela de datos al seleccionar PDV
+# En lugar de 3 llamadas secuenciales (sellout → ranking → hoja_vida),
+# se ejecutan en paralelo con ThreadPoolExecutor reduciendo el tiempo total
+# al de la llamada más lenta en vez de la suma de todas.
+# ─────────────────────────────────────────────────────────────────────────────
+def cargar_datos_pdv_paralelo(ean_pdv: str, nombre_pdv: str) -> dict:
+    """Ejecuta get_sellout, get_ranking y get_hoja_vida en paralelo."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        fut_sellout = executor.submit(get_sellout_agregado_by_ean_pdv, ean_pdv)
+        fut_ranking = executor.submit(get_ranking_pdv, ean_pdv)
+        fut_hoja    = executor.submit(get_hoja_vida_existente, nombre_pdv)
+        return {
+            "sellout": fut_sellout.result(),
+            "ranking": fut_ranking.result(),
+            "hoja":    fut_hoja.result(),
+        }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. INTERFAZ STREAMLIT
