@@ -309,18 +309,16 @@ def get_pdv_info(segmento_nielsen: str, comerciante_red: str, nombre_pdv: str, f
 def get_sellout_agregado_by_ean_pdv(ean_pdv) -> dict:
     ORDEN_MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
                    "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
-    MESES_NUM   = {m: i+1 for i, m in enumerate(ORDEN_MESES)}
-
+    MESES_NUM = {m: i+1 for i, m in enumerate(ORDEN_MESES)}
     FOOT_MARCAS = {
         "MEXSANA","MEXSANA MEDICAL",
         "ACID MANTLE","ACID MANTLE BABY","ACID MANTLE PROB5","ACID MANTLE TATTOO",
         "BEPANTHEN",
     }
-
     ANIO_A = 2025
     ANIO_B = 2026
 
-    res   = supabase.rpc("get_sellout_agregado", {"p_ean": str(ean_pdv)}).execute()
+    res = supabase.rpc("get_sellout_agregado", {"p_ean": str(ean_pdv)}).execute()
     filas = res.data or []
 
     mes_anio:   dict[tuple, float] = defaultdict(float)
@@ -334,35 +332,48 @@ def get_sellout_agregado_by_ean_pdv(ean_pdv) -> dict:
         marc = (r.get("marca")    or "").upper().strip()
         mat  = (r.get("material") or "").strip()
         v    = float(r.get("total_valor") or 0) * 1_000_000
-
         if a not in (ANIO_A, ANIO_B):
             continue
         if mn:
-            mes_anio[(a, mn)]    += v
-            total_anio[a]        += v
+            mes_anio[(a, mn)] += v
+            total_anio[a]     += v
         if marc:
             marca_anio[(a, marc)] += v
         if mat:
-            sku_anio[(a, mat)]    += v
+            sku_anio[(a, mat)] += v
 
     tiene_datos = bool(total_anio)
-
     m_A = len({mn for (a, mn) in mes_anio if a == ANIO_A and mes_anio[(a, mn)] > 0}) or 1
     m_B = len({mn for (a, mn) in mes_anio if a == ANIO_B and mes_anio[(a, mn)] > 0}) or 1
+
+    # ✅ FIX: determinar el último mes con datos reales de 2026
+    ultimo_mes_B = max(
+        (mn for (a, mn) in mes_anio if a == ANIO_B and mes_anio[(ANIO_B, mn)] > 0),
+        default=0
+    )
 
     sell_out_mensual = {}
     acum_A = acum_B = 0
     for mes_nombre in ORDEN_MESES:
-        n    = MESES_NUM[mes_nombre]
-        vA   = round(mes_anio.get((ANIO_A, n), 0))
-        vB   = round(mes_anio.get((ANIO_B, n), 0))
+        n  = MESES_NUM[mes_nombre]
+        vA = round(mes_anio.get((ANIO_A, n), 0))
+        vB = round(mes_anio.get((ANIO_B, n), 0))
         acum_A += vA
-        acum_B += vB
+        # ✅ FIX: solo acumular 2026 si el mes tiene datos reales
+        if n <= ultimo_mes_B:
+            acum_B += vB
+
         sell_out_mensual[mes_nombre] = {
-            "sell_out_mes_2025":  vA,  "sell_out_mes_2026":  vB,
-            "sell_out_acum_2025": acum_A, "sell_out_acum_2026": acum_B,
-            "sell_out_mes_2020":  vA,  "sell_out_mes_2021":  vB,
-            "sell_out_acum_2020": acum_A, "sell_out_acum_2021": acum_B,
+            "sell_out_mes_2025":  vA,
+            "sell_out_mes_2026":  vB,
+            "sell_out_acum_2025": acum_A,
+            # ✅ FIX: acumulado 2026 = 0 para meses sin datos
+            "sell_out_acum_2026": acum_B if n <= ultimo_mes_B else 0,
+            # aliases que usa la UI
+            "sell_out_mes_2020":  vA,
+            "sell_out_mes_2021":  vB,
+            "sell_out_acum_2020": acum_A,
+            "sell_out_acum_2021": acum_B if n <= ultimo_mes_B else 0,
         }
 
     marcas_unicas = {m for (a, m) in marca_anio if m}
@@ -397,8 +408,8 @@ def get_sellout_agregado_by_ean_pdv(ean_pdv) -> dict:
         "ventas_prom_otc":   round(otc_B / m_B),
         "ventas_prom_foot":  round(foot_B / m_B),
         "tiene_datos":       tiene_datos,
-        "anio_a": ANIO_A,
-        "anio_b": ANIO_B,
+        "anio_a":            ANIO_A,
+        "anio_b":            ANIO_B,
     }
 
 def get_ranking_pdv(ean_pdv) -> dict:
@@ -407,7 +418,7 @@ def get_ranking_pdv(ean_pdv) -> dict:
     Retorna dict con strings tipo "979 de 4080" por cada ranking.
     """
     VACIO = {"ranking_nacional": "", "ranking_cadena_nacional": "",
-             "ranking_cadena_regional": "", "tiene_datos": False}
+             "ranking_cadena_regional": "", "zona_nielsen": "", "tiene_datos": False}
     try:
         res  = supabase.rpc("get_ranking_pdv", {"p_ean": str(ean_pdv)}).execute()
         data = res.data[0] if res.data else None
@@ -422,10 +433,13 @@ def get_ranking_pdv(ean_pdv) -> dict:
         r_reg = data.get("ranking_cadena_regional")
         t_reg = data.get("total_pdvs_cadena_region")
 
+        r_zon = data.get("ranking_zona_nielsen")
+        t_zon = data.get("total_pdvs_zona_nielsen")
         return {
             "ranking_nacional":        f"{r_nac} de {t_nac}" if r_nac is not None else "",
             "ranking_cadena_nacional": f"{r_cad} de {t_cad}" if r_cad is not None else "",
             "ranking_cadena_regional": f"{r_reg} de {t_reg}" if r_reg is not None else "",
+            "zona_nielsen":            f"{r_zon} de {t_zon}" if r_zon is not None else "",
             "tiene_datos": True,
         }
 
@@ -640,16 +654,19 @@ def main():
             ean_pdv = pdv_info.get("ean_pdv", "")
             if ean_pdv:
                 ean_str = str(ean_pdv).strip()
-                with st.spinner("Cargando datos de Sell Out..."):
-                    so_agg = get_sellout_agregado_by_ean_pdv(ean_str)
-                st.session_state["sellout_agregado"] = so_agg
-
-                # ── Rankings PDV ──────────────────────────────────────────────
-                with st.spinner("Calculando rankings..."):
-                    rk_data = get_ranking_pdv(ean_str)
-                st.session_state["rk_pdv_nac"]     = rk_data["ranking_nacional"]
-                st.session_state["rk_pdv_cad_nac"] = rk_data["ranking_cadena_nacional"]
-                st.session_state["rk_pdv_cad_reg"] = rk_data["ranking_cadena_regional"]
+                # FIX lentitud: paralelizar ambas llamadas RPC
+                from concurrent import futures as _cf
+                with st.spinner("Cargando datos del PDV..."):
+                    with _cf.ThreadPoolExecutor(max_workers=2) as _pool:
+                        _fut_so = _pool.submit(get_sellout_agregado_by_ean_pdv, ean_str)
+                        _fut_rk = _pool.submit(get_ranking_pdv, ean_str)
+                        so_agg  = _fut_so.result()
+                        rk_data = _fut_rk.result()
+                st.session_state["sellout_agregado"]  = so_agg
+                st.session_state["rk_pdv_nac"]        = rk_data["ranking_nacional"]
+                st.session_state["rk_pdv_cad_nac"]    = rk_data["ranking_cadena_nacional"]
+                st.session_state["rk_pdv_cad_reg"]    = rk_data["ranking_cadena_regional"]
+                st.session_state["rk_zona_nielsen"]   = rk_data.get("zona_nielsen", "")
 
                 if so_agg["tiene_datos"]:
                     # SELL OUT siempre tiene prioridad sobre hoja_vida (se actualiza cada 3-4 meses)
@@ -797,7 +814,9 @@ def main():
         if "ranking_cad_reg" not in st.session_state:
             st.session_state["ranking_cad_reg"] = _rk_cad_reg_val
         if "ranking_zona" not in st.session_state:
-            st.session_state["ranking_zona"] = _v("ranking_pdv_zona_asignada")
+            # FIX: priorizar zona del ranking_pdv_cache
+            _zona_rk = st.session_state.get("rk_zona_nielsen") or ""
+            st.session_state["ranking_zona"] = _zona_rk or _v("ranking_pdv_zona_asignada")
         if "tiene_domicilio" not in st.session_state:
             st.session_state["tiene_domicilio"] = _hv.get("tiene_domicilio", "No")
 
@@ -1057,8 +1076,11 @@ def main():
     # Pre-llenar sell_out_marcas desde hoja_vida o sellout BD
     _so_marcas_prev = {}
     if _so_prev.get("por_marca"):
+        # FIX: evitar duplicados — primera aparición de cada marca gana
         for r in _so_prev["por_marca"]:
-            _so_marcas_prev[r.get("marca", "")] = r
+            _k = r.get("marca", "")
+            if _k and _k not in _so_marcas_prev:
+                _so_marcas_prev[_k] = r
     elif _so.get("sell_out_marcas"):
         _so_marcas_prev = _so["sell_out_marcas"]
 
